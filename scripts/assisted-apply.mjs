@@ -42,7 +42,7 @@ function applyUrlFor(url) {
 // are always left for the candidate.
 function fieldValueFor(label, me) {
   const text = label.toLowerCase().replace(/[_.\-]+/g, " ");
-  if (/cover letter|why |salary|compensation|pronoun|gender|race|veteran|disabilit/.test(text)) return null;
+  if (/cover letter|why |pronoun|gender|race|veteran|disabilit/.test(text)) return null;
   if (/first\s*name|given name|vorname|voornaam|prénom|^nombre\b/.test(text)) return me.first;
   if (/last\s*name|surname|family name|nachname|achternaam|apellido|nom de famille/.test(text)) return me.last;
   if (/full name|^name\b|your name|legal name|vollständiger name|nombre completo/.test(text)) return me.full;
@@ -66,13 +66,14 @@ function savedAnswerFor(question, answers) {
     return answers.authorized_to_work;
   }
   if (/relocat/.test(q)) return answers.open_to_relocate;
-  if (/hear about|how did you (find|hear)|where did you (find|hear)|referral source/.test(q)) {
+  if (/hear about|how did you (find|hear)|where did you (find|hear)|referral source|origin of application/.test(q)) {
     return answers.how_heard;
   }
-  if (/notice period|earliest (start|date)|when can you start|availability/.test(q)) {
+  if (/preferred (method|way|channel) of (communication|contact)/.test(q)) return "Email";
+  if (/notice period|earliest (start|date)|when can you start|availability|available from|available to start|start date|date available/.test(q)) {
     return answers.notice_period;
   }
-  if (/salary|compensation expectation|expected pay/.test(q)) return answers.salary_expectation;
+  if (/salary|compensation|expected pay|gehalt/.test(q)) return answers.salary_expectation;
   if (/^\s*country\b/.test(q)) return answers.country;
   return null;
 }
@@ -353,7 +354,7 @@ async function fillFrame(frame, me, resumePath, answers) {
   const choices = await answerChoices(frame, answers, me);
   filled += choices.applied;
   const needsYou = [...choices.skipped];
-  const textTypes = new Set(["text", "email", "tel", "url", "input", "textarea", "search"]);
+  const textTypes = new Set(["text", "email", "tel", "url", "input", "textarea", "search", "date"]);
   const files = fields.filter((f) => f.type === "file");
 
   for (const f of fields) {
@@ -370,9 +371,12 @@ async function fillFrame(frame, me, resumePath, answers) {
       if (!f.visible || !textTypes.has(f.type) || f.role === "combobox") continue;
       if (f.value !== "") continue;
       const saved = savedAnswerFor(f.label, answers);
-      const value =
+      let value =
         fieldValueFor(f.label, me) ||
         (saved === "yes" ? "Yes" : saved === "no" ? "No" : saved);
+      if (value && f.type === "date") {
+        value = /immediate|now|asap/i.test(value) ? new Date().toISOString().slice(0, 10) : "";
+      }
       if (value) {
         await locator.fill(value);
         filled += 1;
