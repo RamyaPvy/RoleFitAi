@@ -1,11 +1,13 @@
 // Assisted apply: opens each tailored job's employer form in a visible Chrome window, fills
-// your details, uploads the tailored resume, and then WAITS for you to review and click Submit.
-// It never presses Submit and never solves CAPTCHAs. Run with: npm run apply:assist
+// your details, uploads the tailored resume, and waits for you to review and click Submit.
+// With --submit it clicks Submit itself when the form is complete and has no CAPTCHA.
+// It never solves CAPTCHAs. Run with: npm run apply:assist (or apply:submit)
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright-core";
+import { extractText, getDocumentProxy } from "unpdf";
 
 const root = process.cwd();
 
@@ -60,7 +62,12 @@ function fieldValueFor(label, me) {
 function savedAnswerFor(question, answers) {
   if (!answers) return null;
   const q = question.toLowerCase();
-  if (/previously (worked|employed)|former employee|currently,? or have you|relative|conflict/.test(q)) return null;
+  if (/previously (worked|employed)|former employee|currently,? or have you|ever (worked|been employed)/.test(q)) {
+    return answers.previously_worked ?? null;
+  }
+  if (/relative|conflict/.test(q)) return null;
+  if (/veteran|military/.test(q)) return "no";
+  if (/hispanic|latino|latina/.test(q)) return "no";
   if (/pronoun|transgender/.test(q)) return null;
   if (/\bgender\b|geschlecht|\bsex\b/.test(q)) return "Female";
   if (/sponsor|visa/.test(q)) return answers.needs_sponsorship;
@@ -136,7 +143,11 @@ async function answerChoices(frame, answers, me) {
     const wanted = yes(value) || value === "no" ? (yes(value) ? "yes" : "no") : value.toLowerCase();
     return options.find((o) => o.toLowerCase() === wanted) ??
       options.find((o) => o.toLowerCase().startsWith(wanted)) ??
-      options.find((o) => o.toLowerCase().includes(wanted));
+      (wanted === "no"
+        ? options.find((o) => /^(i am not|i'm not|i do not|i don't|not a|not )/i.test(o))
+        : wanted === "yes"
+          ? options.find((o) => /^(i am|i'm|i do|i have)\b(?! not)/i.test(o))
+          : options.find((o) => o.toLowerCase().includes(wanted)));
   };
 
   for (const c of controls) {
@@ -359,7 +370,7 @@ async function fillFrame(frame, me, resumePath, answers) {
   const choices = await answerChoices(frame, answers, me);
   filled += choices.applied;
   const needsYou = [...choices.skipped];
-  const textTypes = new Set(["text", "email", "tel", "url", "input", "textarea", "search", "date"]);
+  const textTypes = new Set(["text", "email", "tel", "url", "input", "textarea", "search", "date", "password"]);
   const files = fields.filter((f) => f.type === "file");
 
   for (const f of fields) {
@@ -377,6 +388,7 @@ async function fillFrame(frame, me, resumePath, answers) {
       if (f.value !== "") continue;
       const saved = savedAnswerFor(f.label, answers);
       let value =
+        (f.type === "password" ? process.env.APPLY_PASSWORD : null) ||
         fieldValueFor(f.label, me) ||
         (saved === "yes" ? "Yes" : saved === "no" ? "No" : saved);
       if (value && f.type === "date") {
@@ -448,8 +460,49 @@ async function trySubmit(page, total) {
   return "no Submit button found";
 }
 
+// Some employers require an account before the application. Fills the email and password from
+// APPLY_PASSWORD in .env.local and continues. Email verification, if required, is left to you.
+async function handleAccountGate(page, me) {
+  if (!process.env.APPLY_PASSWORD) return false;
+  for (const frame of page.frames()) {
+    const gate = await frame
+      .evaluate(() => {
+        const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        if (document.querySelector("input[type=file]")) return null;
+        const pw = [...document.querySelectorAll("input[type=password]")].filter(visible);
+        if (pw.length === 0) return null;
+        const form = pw[0].closest("form") || document.body;
+        const btn = [...form.querySelectorAll("button, input[type=submit]")]
+          .filter(visible)
+          .find((b) => /^\s*(create( an)? account|sign ?up|register|continue|next|sign ?in|log ?in)\s*$/i.test(b.textContent || b.value || ""));
+        if (!btn) return null;
+        btn.setAttribute("data-rf-gate", "1");
+        return true;
+      })
+      .catch(() => null);
+    if (!gate) continue;
+    await fillFrame(frame, me, "", null).catch(() => {});
+    await frame.locator('[data-rf-gate="1"]').first().click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+    return true;
+  }
+  return false;
+}
+
+async function resumeMentions(resumePath, company) {
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(fs.readFileSync(resumePath)));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const word = company.toLowerCase().replace(/\b(inc|llc|ltd|gmbh|corp|co|the|limited)\b\.?/g, "").trim();
+    return word.length >= 3 && text.toLowerCase().includes(word);
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const env = loadEnv();
+  process.env.APPLY_PASSWORD ||= env.APPLY_PASSWORD || "";
   const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
@@ -564,10 +617,18 @@ async function main() {
       await page.goto(applyUrlFor(item.apply_url), { waitUntil: "domcontentloaded", timeout: 45000 });
       await page.waitForTimeout(2500);
       if (await openApplyPage(page)) console.log("  Opened the Apply page.");
+      if (await handleAccountGate(page, me)) {
+        console.log("  Account step completed with your email and APPLY_PASSWORD.");
+        await openApplyPage(page);
+      }
       if (await switchToEnglish(page)) console.log("  Switched the page to English.");
+      const jobAnswers = {
+        ...(answers ?? {}),
+        previously_worked: (await resumeMentions(resumePath, item.company_name)) ? "yes" : "no",
+      };
       let total = { filled: 0, uploaded: false, needsYou: [] };
       for (const frame of page.frames()) {
-        const r = await fillFrame(frame, me, resumePath, answers);
+        const r = await fillFrame(frame, me, resumePath, jobAnswers);
         total = {
           filled: total.filled + r.filled,
           uploaded: total.uploaded || r.uploaded,
