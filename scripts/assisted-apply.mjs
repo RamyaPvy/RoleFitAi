@@ -433,6 +433,7 @@ async function trySubmit(page, total) {
     if (info.disabled) return "the Submit button is still disabled (a required field is empty)";
     if (info.invalid) return "the form still has invalid or empty required fields";
     if (info.unchecked) return "a required consent checkbox is not ticked";
+    await frame.locator('[data-rf-submit="1"]').first().scrollIntoViewIfNeeded().catch(() => {});
     await frame.locator('[data-rf-submit="1"]').first().click({ timeout: 8000 });
     await page.waitForTimeout(6000);
     const confirmed = await page
@@ -542,6 +543,8 @@ async function main() {
   const autoSubmit = process.argv.includes("--submit");
   if (autoSubmit) {
     console.log("Auto-submit is ON: forms are submitted only when every required field is filled.\n");
+  } else {
+    console.log("Auto-submit is OFF (fill-only). To submit automatically, run: npm run apply:submit -- --email <you>\n");
   }
   const work = queue.map((item) => ({ item, retry: false }));
   for (let n = 0; n < work.length; n++) {
