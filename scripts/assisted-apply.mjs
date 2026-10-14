@@ -28,6 +28,9 @@ function argValue(name) {
 function applyUrlFor(url) {
   try {
     const u = new URL(url);
+    if (u.hostname.endsWith(".jobs.personio.de") || u.hostname.endsWith(".jobs.personio.com")) {
+      u.searchParams.set("language", "en");
+    }
     if (u.hostname === "jobs.lever.co" && !u.pathname.endsWith("/apply")) {
       u.pathname = `${u.pathname.replace(/\/$/, "")}/apply`;
     }
@@ -61,7 +64,7 @@ function fieldValueFor(label, me) {
 // not covered, so it is left for the candidate.
 function savedAnswerFor(question, answers) {
   if (!answers) return null;
-  const q = question.toLowerCase();
+  const q = question.toLowerCase().replace(/[_.\-]+/g, " ");
   if (/previously (worked|employed)|former employee|currently,? or have you|ever (worked|been employed)/.test(q)) {
     return answers.previously_worked ?? null;
   }
@@ -79,7 +82,7 @@ function savedAnswerFor(question, answers) {
     return answers.how_heard;
   }
   if (/preferred (method|way|channel) of (communication|contact)/.test(q)) return "Email";
-  if (/notice period|earliest (start|date)|when can you start|availability|available from|available to start|start date|date available/.test(q)) {
+  if (/notice period|earliest (start|date)|when can you start|availability|available from|available to start|start date|date available|verfügbar|eintrittsdatum|frühestmöglich/.test(q)) {
     return answers.notice_period;
   }
   if (/salary|compensation|expected pay|gehalt/.test(q)) return answers.salary_expectation;
