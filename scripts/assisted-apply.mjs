@@ -177,7 +177,7 @@ async function answerChoices(frame, answers, me) {
 }
 
 const APPLY_BUTTON =
-  /^\s*(apply( now| here| today| for this (job|role|position))?|apply to this (job|role|position)|start (your )?application|i'?m interested)\s*$/i;
+  /^\s*(apply( now| here| today| online| for (this|the) (job|role|position|vacancy|opening)| to (this|the) (job|role|position))?|start (your |the )?application|i'?m interested|submit (your )?application|auf diese stelle bewerben|jetzt bewerben|bewerben|postuler|solicitar)\s*[.!>»→]*\s*$/i;
 
 async function hasApplicationForm(page) {
   for (const frame of page.frames()) {
@@ -193,19 +193,24 @@ async function hasApplicationForm(page) {
   return false;
 }
 
-// Many career pages only show a job description with an Apply link. Opening it just
-// navigates to the form; nothing is submitted.
-async function openApplyPage(page) {
-  if (await hasApplicationForm(page)) return false;
-  const found = await page
+// Many career pages only show a job description with an Apply link, sometimes through two
+// pages. Following the link just navigates to the form; nothing is submitted.
+async function findApplyTarget(frame) {
+  return frame
     .evaluate((source) => {
       const pattern = new RegExp(source, "i");
-      const items = [...document.querySelectorAll("a, button")].filter((el) =>
-        pattern.test((el.textContent || "").trim()),
-      );
-      const link = items.find((el) => el.tagName === "A" && el.getAttribute("href"));
+      const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      const text = (el) => (el.textContent || el.value || el.getAttribute("aria-label") || "").trim();
+      const items = [...document.querySelectorAll("a, button, [role=button], input[type=submit]")]
+        .filter((el) => pattern.test(text(el)))
+        .filter((el) => !el.closest("form") || !el.closest("form").querySelector("input[type=file]"));
+      const real = (el) => {
+        const href = el.tagName === "A" ? el.getAttribute("href") : null;
+        return href && !href.startsWith("#") && !href.startsWith("mailto:") && !href.startsWith("javascript:");
+      };
+      const link = items.find(real);
       if (link) return { href: link.href };
-      const button = items.find((el) => !!(el.offsetWidth || el.offsetHeight));
+      const button = items.find(visible);
       if (button) {
         button.setAttribute("data-rf-apply", "1");
         return { click: true };
@@ -213,16 +218,46 @@ async function openApplyPage(page) {
       return null;
     }, APPLY_BUTTON.source)
     .catch(() => null);
-  if (!found) return false;
-  if (found.href && !found.href.startsWith("mailto:") && !found.href.endsWith("#")) {
-    await page.goto(found.href, { waitUntil: "domcontentloaded", timeout: 45000 });
-  } else if (found.click) {
-    await page.locator('[data-rf-apply="1"]').first().click({ timeout: 8000 });
-  } else {
-    return false;
+}
+
+async function openApplyPage(page) {
+  // Cloudflare check pages pass on their own in a real browser; give them a moment.
+  for (let i = 0; i < 8 && /just a moment/i.test(await page.title().catch(() => "")); i++) {
+    await page.waitForTimeout(2000);
   }
-  await page.waitForTimeout(3000);
-  return true;
+  let opened = false;
+  for (let hop = 0; hop < 3; hop++) {
+    if (await hasApplicationForm(page)) break;
+    let target = null;
+    for (const frame of page.frames()) {
+      target = await findApplyTarget(frame);
+      if (target) {
+        target.frame = frame;
+        break;
+      }
+    }
+    if (!target) break;
+    const before = page.url();
+    try {
+      if (target.href) {
+        await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 45000 });
+      } else {
+        const popup = page.context().waitForEvent("page", { timeout: 4000 }).catch(() => null);
+        await target.frame.locator('[data-rf-apply="1"]').first().click({ timeout: 8000 });
+        const extra = await popup;
+        if (extra) {
+          await extra.waitForLoadState("domcontentloaded").catch(() => {});
+          await extra.close().catch(() => {});
+        }
+      }
+    } catch {
+      break;
+    }
+    await page.waitForTimeout(3000);
+    opened = opened || page.url() !== before;
+    if (!opened && hop > 0) break;
+  }
+  return opened;
 }
 
 async function fillFrame(frame, me, resumePath, answers) {
