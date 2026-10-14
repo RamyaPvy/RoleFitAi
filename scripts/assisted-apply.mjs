@@ -576,11 +576,30 @@ async function main() {
     console.log("Tip: add your full name, phone and location on My profile to pre-fill more.");
   }
 
-  const { data: tailored } = await supabase
+  const minScore = Number(argValue("min-score")) || 0;
+  let { data: tailored, error: tailoredError } = await supabase
     .from("tailored_resumes")
-    .select("id, job_id, company_name, job_title, apply_url, file_name, storage_path")
+    .select("id, job_id, company_name, job_title, apply_url, file_name, storage_path, match_score")
     .eq("user_id", user.id)
     .order("created_at", { ascending: true });
+  if (tailoredError) {
+    // Fit columns come from migration 0008; fall back so older databases still work.
+    ({ data: tailored } = await supabase
+      .from("tailored_resumes")
+      .select("id, job_id, company_name, job_title, apply_url, file_name, storage_path")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true }));
+  }
+  const belowGate = (tailored ?? []).filter(
+    (t) => minScore > 0 && typeof t.match_score === "number" && t.match_score < minScore,
+  );
+  if (belowGate.length > 0) {
+    console.log(`Skipping ${belowGate.length} job(s) scoring below ${minScore}%:`);
+    for (const t of belowGate.slice(0, 15)) {
+      console.log(`  ${t.match_score}%  ${t.job_title} at ${t.company_name}`);
+    }
+  }
+  tailored = (tailored ?? []).filter((t) => !belowGate.includes(t));
   const { data: apps } = await supabase
     .from("applications")
     .select("job_id, status")
