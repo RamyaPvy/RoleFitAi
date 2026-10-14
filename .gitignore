@@ -44,3 +44,4 @@ next-env.d.ts
 # assisted-apply: personal resumes and browser profile
 /applications/
 /.apply-profile/
+/.apply-test/
