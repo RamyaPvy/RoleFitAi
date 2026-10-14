@@ -1,8 +1,9 @@
 "use client";
 
 const MAX_BATCH = 30;
+const MIN_FIT = 50;
 
-// Ticks the first 30 jobs on this page that are not already tailored.
+// Ticks up to 30 untailored jobs on this page that fit the resume (50%+), skipping poor fits.
 export function SelectJobsButton() {
   return (
     <button
@@ -10,12 +11,16 @@ export function SelectJobsButton() {
       type="button"
       onClick={() => {
         const boxes = document.querySelectorAll<HTMLInputElement>('input[name="jobIds"]');
-        boxes.forEach((box, index) => {
-          box.checked = index < MAX_BATCH;
-        });
+        let picked = 0;
+        for (const box of boxes) {
+          const fit = box.dataset.fit;
+          const good = fit === undefined || fit === "" || Number(fit) >= MIN_FIT;
+          box.checked = good && picked < MAX_BATCH;
+          if (box.checked) picked += 1;
+        }
       }}
     >
-      Select first 30
+      Select good fits (50%+)
     </button>
   );
 }

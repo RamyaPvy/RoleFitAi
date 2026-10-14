@@ -2074,6 +2074,20 @@ h1 {
   color: #327654;
 }
 
+.job-fit {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+}
+.job-fit.is-good {
+  color: #327654;
+}
+.job-fit.is-ok {
+  color: #9a6a00;
+}
+.job-fit.is-low {
+  color: #a33a3a;
+}
+
 .fit-panel {
   margin: 0.5rem 0;
 }

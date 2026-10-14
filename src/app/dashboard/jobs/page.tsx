@@ -10,6 +10,8 @@ import {
   sanitizeSearchTerm,
   scoreJob,
 } from "@/lib/jobs/matching";
+import { extractResumeText } from "@/lib/resume/extract";
+import { analyzeFit } from "@/lib/resume/fit";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 import { PendingButton } from "./pending-button";
@@ -163,9 +165,34 @@ export default async function JobMatchesPage({
   const trackedStatus = new Map((tracked ?? []).map((row) => [row.job_id as string, row.status]));
   const { data: resumes } = await supabase
     .from("resumes")
-    .select("id, file_name")
+    .select("id, file_name, storage_path, content_type")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
+
+  // Preview fit against the newest resume so only relevant jobs get tailored.
+  let previewText = "";
+  const newest = resumes?.[0];
+  if (newest) {
+    try {
+      const { data: file } = await supabase.storage.from("resumes").download(newest.storage_path);
+      if (file) {
+        previewText = await extractResumeText(
+          new Uint8Array(await file.arrayBuffer()),
+          newest.content_type,
+        );
+      }
+    } catch {
+      previewText = "";
+    }
+  }
+  const fitFor = (job: { title: string; description: string | null }) =>
+    previewText.length > 100
+      ? analyzeFit({
+          resumeText: previewText,
+          jobTitle: job.title,
+          jobDescription: job.description ?? job.title,
+        }).score
+      : null;
 
   return (
     <DashboardShell email={user.email} active="jobs" crumb="Job matches">
@@ -308,6 +335,7 @@ export default async function JobMatchesPage({
                 <JobCard
                   key={job.id}
                   match={match}
+                  fit={fitFor(job)}
                   job={{
                     id: job.id,
                     title: job.title,
@@ -358,6 +386,7 @@ function companyName(companies: unknown): string {
 function JobCard({
   job,
   match,
+  fit,
   showScore,
   resumes,
   returnTo,
@@ -375,6 +404,7 @@ function JobCard({
     tailored: boolean;
   };
   match: JobMatch;
+  fit: number | null;
   showScore: boolean;
   resumes: { id: string; file_name: string }[];
   returnTo: string;
@@ -388,10 +418,22 @@ function JobCard({
           ) : (
             resumes.length > 0 && (
               <label className="job-pick">
-                <input type="checkbox" name="jobIds" value={job.id} form="batch-form" /> Select for
-                batch
+                <input
+                  type="checkbox"
+                  name="jobIds"
+                  value={job.id}
+                  form="batch-form"
+                  data-fit={fit ?? ""}
+                />{" "}
+                Select for batch
               </label>
             )
+          )}
+          {fit !== null && (
+            <p className={`job-fit ${fit >= 50 ? "is-good" : fit >= 30 ? "is-ok" : "is-low"}`}>
+              Fit with your resume: <strong>{fit}%</strong>
+              {fit >= 50 ? " · worth tailoring" : fit >= 30 ? " · partial fit" : " · poor fit"}
+            </p>
           )}
           <h3>{job.title}</h3>
           <p className="form-hint">
