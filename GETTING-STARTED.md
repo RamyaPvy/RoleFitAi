@@ -361,6 +361,19 @@ keys, employer API keys, or candidate data in a public repository. Do not enable
 candidate registration on a public site until its security, privacy, and operations have
 been reviewed.
 
+## Morning batch: assisted apply
+
+1. On **Job matches**, tick up to 30 jobs, choose your resume, and click **Tailor ticked jobs**.
+2. In a terminal in the project folder run `npm run apply:assist -- --email you@example.com`
+   (the email is optional if your project has only one account).
+3. Chrome opens each employer form, fills your name, email, phone, links and location from
+   your profile, and uploads the tailored PDF. Copies are saved in `applications/<date>/`.
+4. You review, answer any questions, solve any CAPTCHA, and click **Submit** yourself, then
+   answer `y` in the terminal so the application is recorded. It never submits for you.
+
+Fill in your full name, phone and location on **My profile** first; the script only fills
+what your profile contains. Add `--all` to re-open items already recorded as applied.
+
 ## Automatic job applications: what remains
 
 Job discovery, per-job resume tailoring, and the application ledger now exist. The app

@@ -9,7 +9,7 @@ import { renderResumePdf, tailoredFileName } from "@/lib/resume/render";
 import { tailorResume } from "@/lib/resume/tailor";
 import { createClient } from "@/lib/supabase/server";
 
-const DAILY_LIMIT = 20;
+const DAILY_LIMIT = 60;
 
 async function requireUser() {
   const supabase = await createClient();
@@ -22,6 +22,92 @@ async function requireUser() {
 
 const tailorSchema = z.object({ jobId: z.uuid(), resumeId: z.uuid() });
 
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+async function tailorOne(
+  supabase: Supabase,
+  user: { id: string },
+  jobId: string,
+  resumeId: string,
+): Promise<string> {
+  const [{ data: job }, { data: resume }, { data: profile }] = await Promise.all([
+    supabase
+      .from("jobs")
+      .select("id, title, description, apply_url, company_name, companies(name)")
+      .eq("id", jobId)
+      .maybeSingle(),
+    supabase
+      .from("resumes")
+      .select("id, storage_path, content_type")
+      .eq("id", resumeId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase.from("profiles").select("full_name").eq("user_id", user.id).maybeSingle(),
+  ]);
+  if (!job || !resume) throw new Error("not-found");
+
+  const company = Array.isArray(job.companies) ? job.companies[0] : job.companies;
+  const companyName = job.company_name ?? company?.name ?? "Company";
+
+  const { data: file, error: downloadError } = await supabase.storage
+    .from("resumes")
+    .download(resume.storage_path);
+  if (downloadError || !file) throw new Error("download");
+
+  const resumeText = await extractResumeText(
+    new Uint8Array(await file.arrayBuffer()),
+    resume.content_type,
+  );
+  if (resumeText.length < 100) throw new Error("unreadable");
+
+  const tailored = await tailorResume({
+    resumeText,
+    jobTitle: job.title,
+    companyName,
+    jobDescription: job.description ?? job.title,
+  });
+  if (profile?.full_name) tailored.name = profile.full_name;
+
+  const pdf = await renderResumePdf(tailored);
+  const fileName = tailoredFileName(companyName, tailored.name);
+  const newId = randomUUID();
+  const storagePath = `${user.id}/tailored/${newId}.pdf`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("resumes")
+    .upload(storagePath, pdf, { contentType: "application/pdf", upsert: false });
+  if (uploadError) throw new Error("upload");
+
+  const { error: insertError } = await supabase.from("tailored_resumes").insert({
+    id: newId,
+    user_id: user.id,
+    job_id: job.id,
+    source_resume_id: resume.id,
+    company_name: companyName,
+    job_title: job.title,
+    apply_url: job.apply_url,
+    file_name: fileName,
+    storage_path: storagePath,
+    summary: tailored.summary || null,
+    gaps: tailored.gaps,
+  });
+  if (insertError) {
+    await supabase.storage.from("resumes").remove([storagePath]);
+    throw new Error("save");
+  }
+  return newId;
+}
+
+async function tailoredInLastDay(supabase: Supabase, userId: string) {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from("tailored_resumes")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("created_at", since);
+  return count ?? 0;
+}
+
 export async function tailorResumeAction(formData: FormData) {
   const { supabase, user } = await requireUser();
   const parsed = tailorSchema.safeParse({
@@ -30,81 +116,13 @@ export async function tailorResumeAction(formData: FormData) {
   });
   if (!parsed.success) redirect("/dashboard/tailored?error=choose-resume");
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { count } = await supabase
-    .from("tailored_resumes")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .gte("created_at", since);
-  if ((count ?? 0) >= DAILY_LIMIT) redirect("/dashboard/tailored?error=limit");
-
-  const [{ data: job }, { data: resume }, { data: profile }] = await Promise.all([
-    supabase
-      .from("jobs")
-      .select("id, title, description, apply_url, company_name, companies(name)")
-      .eq("id", parsed.data.jobId)
-      .maybeSingle(),
-    supabase
-      .from("resumes")
-      .select("id, storage_path, content_type")
-      .eq("id", parsed.data.resumeId)
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase.from("profiles").select("full_name").eq("user_id", user.id).maybeSingle(),
-  ]);
-  if (!job || !resume) redirect("/dashboard/tailored?error=not-found");
-
-  const company = Array.isArray(job.companies) ? job.companies[0] : job.companies;
-  const companyName = job.company_name ?? company?.name ?? "Company";
+  if ((await tailoredInLastDay(supabase, user.id)) >= DAILY_LIMIT) {
+    redirect("/dashboard/tailored?error=limit");
+  }
 
   let newId: string;
   try {
-    const { data: file, error: downloadError } = await supabase.storage
-      .from("resumes")
-      .download(resume.storage_path);
-    if (downloadError || !file) throw new Error("download");
-
-    const resumeText = await extractResumeText(
-      new Uint8Array(await file.arrayBuffer()),
-      resume.content_type,
-    );
-    if (resumeText.length < 100) throw new Error("unreadable");
-
-    const tailored = await tailorResume({
-      resumeText,
-      jobTitle: job.title,
-      companyName,
-      jobDescription: job.description ?? job.title,
-    });
-    if (profile?.full_name) tailored.name = profile.full_name;
-
-    const pdf = await renderResumePdf(tailored);
-    const fileName = tailoredFileName(companyName, tailored.name);
-    newId = randomUUID();
-    const storagePath = `${user.id}/tailored/${newId}.pdf`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("resumes")
-      .upload(storagePath, pdf, { contentType: "application/pdf", upsert: false });
-    if (uploadError) throw new Error("upload");
-
-    const { error: insertError } = await supabase.from("tailored_resumes").insert({
-      id: newId,
-      user_id: user.id,
-      job_id: job.id,
-      source_resume_id: resume.id,
-      company_name: companyName,
-      job_title: job.title,
-      apply_url: job.apply_url,
-      file_name: fileName,
-      storage_path: storagePath,
-      summary: tailored.summary || null,
-      gaps: tailored.gaps,
-    });
-    if (insertError) {
-      await supabase.storage.from("resumes").remove([storagePath]);
-      throw new Error("save");
-    }
+    newId = await tailorOne(supabase, user, parsed.data.jobId, parsed.data.resumeId);
   } catch (error) {
     console.error("Resume tailoring failed:", error);
     const reason = error instanceof Error ? error.message : "";
@@ -113,12 +131,45 @@ export async function tailorResumeAction(formData: FormData) {
         ? "unreadable"
         : reason === "unstructured"
           ? "unstructured"
-          : "failed";
+          : reason === "not-found"
+            ? "not-found"
+            : "failed";
     redirect(`/dashboard/tailored?error=${code}`);
   }
 
   revalidatePath("/dashboard/tailored");
   redirect(`/dashboard/tailored?new=${newId}`);
+}
+
+const BATCH_MAX = 30;
+
+// Tailors one resume for every selected job so a whole morning's batch is ready at once.
+export async function tailorBatchAction(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const resumeId = z.uuid().safeParse(String(formData.get("resumeId") ?? ""));
+  const jobIds = [...new Set(formData.getAll("jobIds").map(String))]
+    .filter((id) => z.uuid().safeParse(id).success)
+    .slice(0, BATCH_MAX);
+  if (!resumeId.success || jobIds.length === 0) redirect("/dashboard/tailored?error=choose-jobs");
+
+  const room = DAILY_LIMIT - (await tailoredInLastDay(supabase, user.id));
+  if (room <= 0) redirect("/dashboard/tailored?error=limit");
+
+  let done = 0;
+  let failed = 0;
+  for (const jobId of jobIds.slice(0, room)) {
+    try {
+      await tailorOne(supabase, user, jobId, resumeId.data);
+      done += 1;
+    } catch (error) {
+      console.error("Batch tailoring failed for a job:", error);
+      failed += 1;
+    }
+  }
+  const skipped = Math.max(0, jobIds.length - room);
+
+  revalidatePath("/dashboard/tailored");
+  redirect(`/dashboard/tailored?batch=${done}&failed=${failed}&skipped=${skipped}`);
 }
 
 // Records the candidate's own confirmation that they submitted on the employer site.

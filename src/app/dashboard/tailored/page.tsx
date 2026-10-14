@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 
 const ERRORS: Record<string, string> = {
   "choose-resume": "Upload a resume on My profile first, then choose it before tailoring.",
-  limit: "You reached today's limit of 20 tailored resumes. Try again tomorrow.",
+  limit: "You reached today's limit of 60 tailored resumes. Try again tomorrow.",
+  "choose-jobs": "Tick at least one job on Job matches, then choose a resume.",
   "not-found": "That job or resume could not be found.",
   unreadable:
     "We couldn't read enough text from that resume. Upload a text-based PDF or DOCX (not a scan).",
@@ -22,7 +23,13 @@ const ERRORS: Record<string, string> = {
 export default async function TailoredResumesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ new?: string; error?: string }>;
+  searchParams: Promise<{
+    new?: string;
+    error?: string;
+    batch?: string;
+    failed?: string;
+    skipped?: string;
+  }>;
 }) {
   if (!getSupabaseConfig()) redirect("/");
   const params = await searchParams;
@@ -63,6 +70,15 @@ export default async function TailoredResumesPage({
           </p>
         </div>
       </div>
+
+      {params.batch && (
+        <div className="form-message is-success" role="status">
+          Tailored {Number(params.batch) || 0} resume(s)
+          {Number(params.failed) > 0 ? `, ${Number(params.failed)} failed` : ""}
+          {Number(params.skipped) > 0 ? `, ${Number(params.skipped)} skipped (daily limit)` : ""}.
+          Run <code>npm run apply:assist</code> to open them one by one.
+        </div>
+      )}
 
       {params.error && (
         <div className="form-message is-error" role="alert">

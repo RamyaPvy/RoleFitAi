@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { trackJobAction } from "@/app/dashboard/application-actions";
 import { DashboardShell } from "@/app/dashboard/shell";
-import { tailorResumeAction } from "@/app/dashboard/tailor-actions";
+import { tailorBatchAction, tailorResumeAction } from "@/app/dashboard/tailor-actions";
 import {
   expandRelatedTitles,
   type JobMatch,
@@ -250,27 +250,51 @@ export default async function JobMatchesPage({
             and keyword fields. Niche roles often have no postings in the last 24 hours.
           </p>
         ) : (
-          <ul className="job-list">
-            {ranked.map(({ job, match }) => (
-              <JobCard
-                key={job.id}
-                match={match}
-                job={{
-                  id: job.id,
-                  title: job.title,
-                  company: job.company_name ?? companyName(job.companies),
-                  location: job.location,
-                  postedAt: job.posted_at,
-                  applyUrl: job.apply_url,
-                  authorization: job.work_authorization,
-                  evidence: job.work_authorization_evidence,
-                  trackStatus: trackedStatus.get(job.id),
-                }}
-                showScore={false}
-                resumes={resumes ?? []}
-              />
-            ))}
-          </ul>
+          <>
+            {(resumes ?? []).length > 0 && (
+              <form action={tailorBatchAction} id="batch-form" className="batch-bar">
+                <strong>Batch apply prep</strong>
+                <select
+                  name="resumeId"
+                  aria-label="Resume to tailor"
+                  defaultValue={resumes?.[0]?.id}
+                >
+                  {(resumes ?? []).map((resume) => (
+                    <option key={resume.id} value={resume.id}>
+                      {resume.file_name}
+                    </option>
+                  ))}
+                </select>
+                <button className="button button-primary" type="submit">
+                  Tailor ticked jobs (max 30)
+                </button>
+                <span className="form-hint">
+                  Tick the jobs below, then run <code>npm run apply:assist</code> later.
+                </span>
+              </form>
+            )}
+            <ul className="job-list">
+              {ranked.map(({ job, match }) => (
+                <JobCard
+                  key={job.id}
+                  match={match}
+                  job={{
+                    id: job.id,
+                    title: job.title,
+                    company: job.company_name ?? companyName(job.companies),
+                    location: job.location,
+                    postedAt: job.posted_at,
+                    applyUrl: job.apply_url,
+                    authorization: job.work_authorization,
+                    evidence: job.work_authorization_evidence,
+                    trackStatus: trackedStatus.get(job.id),
+                  }}
+                  showScore={false}
+                  resumes={resumes ?? []}
+                />
+              ))}
+            </ul>
+          </>
         )}
         {totalPages > 1 && (
           <div className="form-actions">
@@ -324,6 +348,12 @@ function JobCard({
     <li className="job-card">
       <div className="job-card-head">
         <div>
+          {resumes.length > 0 && (
+            <label className="job-pick">
+              <input type="checkbox" name="jobIds" value={job.id} form="batch-form" /> Select for
+              batch
+            </label>
+          )}
           <h3>{job.title}</h3>
           <p className="form-hint">
             {job.company}

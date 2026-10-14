@@ -2040,3 +2040,19 @@ h1 {
   margin: 0.25rem 0 0.75rem 1.25rem;
   font-size: 0.85rem;
 }
+
+.batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.job-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #5f6b73;
+}
