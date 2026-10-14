@@ -43,9 +43,9 @@ function applyUrlFor(url) {
 function fieldValueFor(label, me) {
   const text = label.toLowerCase();
   if (/cover letter|why |salary|compensation|pronoun|gender|race|veteran|disabilit/.test(text)) return null;
-  if (/first\s*name|given name/.test(text)) return me.first;
-  if (/last\s*name|surname|family name/.test(text)) return me.last;
-  if (/full name|^name\b|your name|legal name/.test(text)) return me.full;
+  if (/first\s*name|given name|vorname|voornaam|prénom|^nombre\b/.test(text)) return me.first;
+  if (/last\s*name|surname|family name|nachname|achternaam|apellido|nom de famille/.test(text)) return me.last;
+  if (/full name|^name\b|your name|legal name|vollständiger name|nombre completo/.test(text)) return me.full;
   if (/e-?mail/.test(text)) return me.email;
   if (/phone|mobile|telephone/.test(text)) return me.phone;
   if (/linkedin/.test(text)) return me.linkedin;
@@ -260,6 +260,40 @@ async function openApplyPage(page) {
   return opened;
 }
 
+// Employer pages often pick a language from the location. Pick English when a switcher exists.
+async function switchToEnglish(page) {
+  const lang = await page.evaluate(() => document.documentElement.lang || "").catch(() => "en");
+  if (/^en/i.test(lang) || !lang) return false;
+  const found = await page
+    .evaluate(() => {
+      const els = [...document.querySelectorAll("a, button, option, [role=menuitem], [role=option]")];
+      const hit = els.find((el) => /^\s*(english|en|inglés|englisch|engels)(\s*\(.*\))?\s*$/i.test(el.textContent || ""));
+      if (!hit) return null;
+      if (hit.tagName === "OPTION") {
+        const select = hit.closest("select");
+        if (!select) return null;
+        select.value = hit.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return { done: true };
+      }
+      if (hit.tagName === "A" && hit.getAttribute("href") && !hit.getAttribute("href").startsWith("#")) {
+        return { href: hit.href };
+      }
+      hit.setAttribute("data-rf-lang", "1");
+      return { click: true };
+    })
+    .catch(() => null);
+  if (!found) return false;
+  try {
+    if (found.href) await page.goto(found.href, { waitUntil: "domcontentloaded", timeout: 30000 });
+    else if (found.click) await page.locator('[data-rf-lang="1"]').first().click({ timeout: 5000 });
+  } catch {
+    return false;
+  }
+  await page.waitForTimeout(2500);
+  return true;
+}
+
 async function fillFrame(frame, me, resumePath, answers) {
   const fields = await frame
     .locator("input, textarea")
@@ -390,7 +424,12 @@ async function main() {
     .eq("user_id", user.id)
     .maybeSingle();
   if (!answers) console.log("Tip: save your standard answers on My profile to pre-fill more.");
-  if (!me.last || !me.phone || !me.location) {
+  if (!me.last) {
+    console.log(
+      "WARNING: your profile name is only one word, so Last name cannot be filled. Put your FULL name on My profile.",
+    );
+  }
+  if (!me.phone || !me.location) {
     console.log("Tip: add your full name, phone and location on My profile to pre-fill more.");
   }
 
@@ -423,6 +462,8 @@ async function main() {
     channel: "chrome",
     headless: false,
     viewport: null,
+    locale: "en-US",
+    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
   });
   const page = context.pages()[0] ?? (await context.newPage());
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -442,6 +483,7 @@ async function main() {
       await page.goto(applyUrlFor(item.apply_url), { waitUntil: "domcontentloaded", timeout: 45000 });
       await page.waitForTimeout(2500);
       if (await openApplyPage(page)) console.log("  Opened the Apply page.");
+      if (await switchToEnglish(page)) console.log("  Switched the page to English.");
       let total = { filled: 0, uploaded: false, needsYou: [] };
       for (const frame of page.frames()) {
         const r = await fillFrame(frame, me, resumePath, answers);
