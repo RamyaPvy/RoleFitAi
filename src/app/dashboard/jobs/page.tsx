@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { trackJobAction } from "@/app/dashboard/application-actions";
+import { SelectJobsButton } from "@/app/dashboard/jobs/select-jobs-button";
 import { DashboardShell } from "@/app/dashboard/shell";
 import { tailorBatchAction, tailorResumeAction } from "@/app/dashboard/tailor-actions";
 import {
@@ -39,7 +40,12 @@ type SearchParams = {
   hideNoSponsorship?: string | string[];
   page?: string | string[];
   scope?: string | string[];
+  tailored?: string | string[];
+  failed?: string | string[];
+  skipped?: string | string[];
 };
+
+const RESULT_KEYS = ["tailored", "failed", "skipped"];
 
 function first(value: string | string[] | undefined) {
   return (Array.isArray(value) ? value[0] : value) ?? "";
@@ -131,15 +137,23 @@ export default async function JobMatchesPage({
 
   const ranked = (jobs ?? []).map((job) => ({ job, match: scoreJob(job, matchProfile) }));
   const totalPages = Math.max(1, Math.ceil((totalFound ?? 0) / PAGE_SIZE));
+  const filterSearch = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    const single = first(value);
+    if (!RESULT_KEYS.includes(key) && single) filterSearch.set(key, single);
+  }
+  const returnTo = `/dashboard/jobs?${filterSearch.toString()}`;
   const pageHref = (target: number) => {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      const single = first(value);
-      if (key !== "page" && single) search.set(key, single);
-    }
+    const search = new URLSearchParams(filterSearch);
     search.set("page", String(target));
     return `/dashboard/jobs?${search.toString()}`;
   };
+  const { data: tailoredRows } = await supabase
+    .from("tailored_resumes")
+    .select("job_id")
+    .eq("user_id", user.id)
+    .not("job_id", "is", null);
+  const tailoredJobs = new Set((tailoredRows ?? []).map((row) => row.job_id as string));
   const { data: tracked } = await supabase
     .from("applications")
     .select("job_id, status")
@@ -251,8 +265,20 @@ export default async function JobMatchesPage({
           </p>
         ) : (
           <>
+            {first(params.tailored) && (
+              <div className="form-message is-success" role="status">
+                Tailored {Number(first(params.tailored)) || 0} resume(s)
+                {Number(first(params.failed)) > 0 ? `, ${Number(first(params.failed))} failed` : ""}
+                {Number(first(params.skipped)) > 0
+                  ? `, ${Number(first(params.skipped))} skipped (daily limit)`
+                  : ""}
+                . Jobs marked &ldquo;Tailored&rdquo; below are ready for{" "}
+                <code>npm run apply:assist</code>.
+              </div>
+            )}
             {(resumes ?? []).length > 0 && (
               <form action={tailorBatchAction} id="batch-form" className="batch-bar">
+                <input type="hidden" name="returnTo" value={returnTo} />
                 <strong>Batch apply prep</strong>
                 <select
                   name="resumeId"
@@ -268,8 +294,10 @@ export default async function JobMatchesPage({
                 <button className="button button-primary" type="submit">
                   Tailor ticked jobs (max 30)
                 </button>
+                <SelectJobsButton />
                 <span className="form-hint">
-                  Tick the jobs below, then run <code>npm run apply:assist</code> later.
+                  Already-tailored jobs are marked and skipped. Then run{" "}
+                  <code>npm run apply:assist</code> later.
                 </span>
               </form>
             )}
@@ -288,7 +316,9 @@ export default async function JobMatchesPage({
                     authorization: job.work_authorization,
                     evidence: job.work_authorization_evidence,
                     trackStatus: trackedStatus.get(job.id),
+                    tailored: tailoredJobs.has(job.id),
                   }}
+                  returnTo={returnTo}
                   showScore={false}
                   resumes={resumes ?? []}
                 />
@@ -328,6 +358,7 @@ function JobCard({
   match,
   showScore,
   resumes,
+  returnTo,
 }: {
   job: {
     id: string;
@@ -339,20 +370,26 @@ function JobCard({
     authorization: keyof typeof AUTHORIZATION_LABELS;
     evidence: string | null;
     trackStatus: string | undefined;
+    tailored: boolean;
   };
   match: JobMatch;
   showScore: boolean;
   resumes: { id: string; file_name: string }[];
+  returnTo: string;
 }) {
   return (
     <li className="job-card">
       <div className="job-card-head">
         <div>
-          {resumes.length > 0 && (
-            <label className="job-pick">
-              <input type="checkbox" name="jobIds" value={job.id} form="batch-form" /> Select for
-              batch
-            </label>
+          {job.tailored ? (
+            <p className="job-tailored">✓ Resume tailored</p>
+          ) : (
+            resumes.length > 0 && (
+              <label className="job-pick">
+                <input type="checkbox" name="jobIds" value={job.id} form="batch-form" /> Select for
+                batch
+              </label>
+            )
           )}
           <h3>{job.title}</h3>
           <p className="form-hint">
@@ -395,6 +432,7 @@ function JobCard({
         {resumes.length > 0 ? (
           <form action={tailorResumeAction} className="job-track-form">
             <input type="hidden" name="jobId" value={job.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
             <select name="resumeId" aria-label="Resume to tailor" defaultValue={resumes[0].id}>
               {resumes.map((resume) => (
                 <option key={resume.id} value={resume.id}>

@@ -2066,3 +2066,10 @@ h1 {
   background: #fff;
   font: inherit;
 }
+
+.job-tailored {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #327654;
+}

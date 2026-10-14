@@ -115,6 +115,7 @@ export async function tailorResumeAction(formData: FormData) {
     resumeId: String(formData.get("resumeId") ?? ""),
   });
   if (!parsed.success) redirect("/dashboard/tailored?error=choose-resume");
+  const returnTo = safeReturnTo(formData.get("returnTo"));
 
   if ((await tailoredInLastDay(supabase, user.id)) >= DAILY_LIMIT) {
     redirect("/dashboard/tailored?error=limit");
@@ -138,19 +139,41 @@ export async function tailorResumeAction(formData: FormData) {
   }
 
   revalidatePath("/dashboard/tailored");
-  redirect(`/dashboard/tailored?new=${newId}`);
+  revalidatePath("/dashboard/jobs");
+  redirect(
+    returnTo
+      ? withParams(returnTo, { tailored: "1", failed: "0" })
+      : `/dashboard/tailored?new=${newId}`,
+  );
 }
 
 const BATCH_MAX = 30;
 
+// Only same-site jobs-page paths are allowed, so the form can't redirect elsewhere.
+function safeReturnTo(value: FormDataEntryValue | null) {
+  const text = String(value ?? "");
+  return text.startsWith("/dashboard/jobs") && !text.includes("//") ? text : null;
+}
+
+function withParams(path: string, extra: Record<string, string>) {
+  const url = new URL(path, "http://local");
+  for (const [key, value] of Object.entries(extra)) url.searchParams.set(key, value);
+  return `${url.pathname}${url.search}`;
+}
+
 // Tailors one resume for every selected job so a whole morning's batch is ready at once.
 export async function tailorBatchAction(formData: FormData) {
   const { supabase, user } = await requireUser();
+  const returnTo = safeReturnTo(formData.get("returnTo"));
   const resumeId = z.uuid().safeParse(String(formData.get("resumeId") ?? ""));
   const jobIds = [...new Set(formData.getAll("jobIds").map(String))]
     .filter((id) => z.uuid().safeParse(id).success)
     .slice(0, BATCH_MAX);
-  if (!resumeId.success || jobIds.length === 0) redirect("/dashboard/tailored?error=choose-jobs");
+  if (!resumeId.success || jobIds.length === 0) {
+    redirect(
+      returnTo ? withParams(returnTo, { tailored: "0" }) : "/dashboard/tailored?error=choose-jobs",
+    );
+  }
 
   const room = DAILY_LIMIT - (await tailoredInLastDay(supabase, user.id));
   if (room <= 0) redirect("/dashboard/tailored?error=limit");
@@ -169,7 +192,13 @@ export async function tailorBatchAction(formData: FormData) {
   const skipped = Math.max(0, jobIds.length - room);
 
   revalidatePath("/dashboard/tailored");
-  redirect(`/dashboard/tailored?batch=${done}&failed=${failed}&skipped=${skipped}`);
+  revalidatePath("/dashboard/jobs");
+  const counts = { tailored: String(done), failed: String(failed), skipped: String(skipped) };
+  redirect(
+    returnTo
+      ? withParams(returnTo, counts)
+      : `/dashboard/tailored?batch=${done}&failed=${failed}&skipped=${skipped}`,
+  );
 }
 
 // Records the candidate's own confirmation that they submitted on the employer site.
