@@ -1,24 +1,34 @@
 import { z } from "zod";
 import { tailorResumeLocal } from "./local-tailor";
 
+// Claude's replies are trimmed to these limits instead of being rejected for being slightly long.
+const text = (max: number) => z.string().transform((value) => value.trim().slice(0, max));
+const list = <T extends z.ZodType>(item: T, max: number) =>
+  z.array(item).transform((items) => items.slice(0, max));
+
 export const tailoredResumeSchema = z.object({
-  name: z.string().max(120),
-  contact: z.array(z.string().max(200)).max(8),
-  summary: z.string().max(900),
-  skills: z.array(z.string().max(60)).max(40),
-  experience: z
-    .array(
-      z.object({
-        title: z.string().max(160),
-        company: z.string().max(160),
-        dates: z.string().max(80),
-        bullets: z.array(z.string().max(400)).max(8),
-      }),
-    )
-    .max(12),
-  education: z.array(z.string().max(300)).max(8),
-  other: z.array(z.string().max(300)).max(10),
-  gaps: z.array(z.string().max(200)).max(10),
+  name: text(120),
+  contact: list(text(200), 8),
+  summary: text(900),
+  skills: z
+    .array(z.string())
+    .transform((items) =>
+      [...new Set(items.flatMap((item) => item.split(/[,;]/)).map((s) => s.trim().slice(0, 60)))]
+        .filter(Boolean)
+        .slice(0, 40),
+    ),
+  experience: list(
+    z.object({
+      title: text(160),
+      company: text(160),
+      dates: text(80),
+      bullets: list(text(400), 8),
+    }),
+    12,
+  ),
+  education: list(text(300), 8),
+  other: list(text(300), 10),
+  gaps: list(text(200), 10),
 });
 
 export type TailoredResume = z.infer<typeof tailoredResumeSchema>;
@@ -67,7 +77,19 @@ export async function tailorResume(input: {
 }): Promise<TailoredResume> {
   // Free built-in engine by default; the AI service is used only if a key is configured.
   if (!process.env.ANTHROPIC_API_KEY) return tailorResumeLocal(input);
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  try {
+    return await tailorWithClaude(input, process.env.ANTHROPIC_API_KEY);
+  } catch (error) {
+    // Never block the user: if the AI service fails or returns something unusable, use the free engine.
+    console.error("AI tailoring failed, using the built-in engine:", error);
+    return tailorResumeLocal(input);
+  }
+}
+
+async function tailorWithClaude(
+  input: { resumeText: string; jobTitle: string; companyName: string; jobDescription: string },
+  apiKey: string,
+): Promise<TailoredResume> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     signal: AbortSignal.timeout(90_000),

@@ -58,9 +58,9 @@ export default async function DashboardPage({
           ⓘ
         </span>
         <span>
-          <strong>Auto-submit is not active.</strong> Direct application submission requires access
-          granted by each participating employer. Until then, RoleFit will not claim that an
-          application was submitted.
+          <strong>Applications are filled on your computer.</strong> This website never submits for
+          you. Run <code>npm run apply:submit</code> locally to fill and submit forms, and RoleFit
+          records an application only after a confirmation is detected.
         </span>
       </div>
       {profileError ? (
