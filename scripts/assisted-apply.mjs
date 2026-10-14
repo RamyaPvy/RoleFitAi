@@ -445,6 +445,22 @@ async function trySubmit(page, total) {
     if (!info) continue;
     if (info.captcha) return "a CAPTCHA is present";
     if (!info.found) continue;
+    const button = frame.locator('[data-rf-submit="1"]').first();
+    for (let i = 0; i < 20 && (await button.isDisabled().catch(() => false)); i++) {
+      await page.waitForTimeout(1000);
+    }
+    const stillInvalid = await frame
+      .evaluate(() => {
+        const b = document.querySelector('[data-rf-submit="1"]');
+        const form = b?.closest("form");
+        return {
+          disabled: !!b && (b.disabled || b.getAttribute("aria-disabled") === "true"),
+          invalid: form?.checkValidity ? !form.checkValidity() : false,
+        };
+      })
+      .catch(() => ({ disabled: false, invalid: false }));
+    info.disabled = stillInvalid.disabled;
+    info.invalid = stillInvalid.invalid;
     if (info.disabled) return "the Submit button is still disabled (a required field is empty)";
     if (info.invalid) return "the form still has invalid or empty required fields";
     if (info.unchecked) return "a required consent checkbox is not ticked";
