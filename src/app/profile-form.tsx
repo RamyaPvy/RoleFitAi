@@ -23,13 +23,17 @@ export function ProfileForm({ profile }: { profile: Profile | null }) {
           />
         </div>
         <div className="form-field">
-          <label htmlFor="currentRole">Current or target role</label>
+          <label htmlFor="currentRole">Current or target roles</label>
           <input
             id="currentRole"
             name="currentRole"
             defaultValue={profile?.current_role ?? ""}
             maxLength={160}
+            placeholder="DevOps Engineer, Cloud Engineer"
           />
+          <p className="form-hint">
+            Separate up to 5 roles with commas. Job matches searches these by default.
+          </p>
         </div>
         <div className="form-field">
           <label htmlFor="phone">Mobile</label>
