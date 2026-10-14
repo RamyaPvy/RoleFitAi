@@ -249,6 +249,10 @@ export type Database = {
           storage_path: string;
           summary: string | null;
           gaps: string[];
+          match_score: number | null;
+          matched_keywords: string[];
+          missing_keywords: string[];
+          ats_issues: string[];
           created_at: string;
         };
         Insert: {
@@ -263,6 +267,10 @@ export type Database = {
           storage_path: string;
           summary?: string | null;
           gaps?: string[];
+          match_score?: number | null;
+          matched_keywords?: string[];
+          missing_keywords?: string[];
+          ats_issues?: string[];
           created_at?: string;
         };
         Update: Record<string, never>;

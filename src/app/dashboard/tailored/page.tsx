@@ -20,6 +20,10 @@ const ERRORS: Record<string, string> = {
     "Tailoring failed. Make sure 202610130006_create_tailored_resumes.sql has been run, then try again.",
 };
 
+function fitClass(score: number) {
+  return score >= 70 ? "is-high" : score >= 45 ? "is-mid" : "is-low";
+}
+
 export default async function TailoredResumesPage({
   searchParams,
 }: {
@@ -114,6 +118,33 @@ export default async function TailoredResumesPage({
                   File: <strong>{item.file_name}</strong>
                 </p>
                 {item.summary && <p className="form-hint">{item.summary}</p>}
+                {item.match_score !== null && item.match_score !== undefined && (
+                  <div className="fit-panel">
+                    <p>
+                      <span className={`fit-score ${fitClass(item.match_score)}`}>
+                        {item.match_score}% keyword match
+                      </span>
+                    </p>
+                    {item.matched_keywords?.length > 0 && (
+                      <p className="form-hint">
+                        <strong>Matched:</strong> {item.matched_keywords.join(", ")}
+                      </p>
+                    )}
+                    {item.missing_keywords?.length > 0 && (
+                      <p className="form-hint">
+                        <strong>Posting mentions, resume doesn&apos;t:</strong>{" "}
+                        {item.missing_keywords.join(", ")}
+                      </p>
+                    )}
+                    {item.ats_issues?.length > 0 && (
+                      <ul className="job-gaps">
+                        {item.ats_issues.map((issue) => (
+                          <li key={issue}>ATS: {issue}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 {item.gaps.length > 0 && (
                   <div>
                     <p className="form-hint">

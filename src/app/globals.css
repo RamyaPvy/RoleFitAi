@@ -2073,3 +2073,26 @@ h1 {
   font-weight: 700;
   color: #327654;
 }
+
+.fit-panel {
+  margin: 0.5rem 0;
+}
+.fit-score {
+  display: inline-block;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.fit-score.is-high {
+  background: #dcfce7;
+  color: #166534;
+}
+.fit-score.is-mid {
+  background: #fef3c7;
+  color: #92400e;
+}
+.fit-score.is-low {
+  background: #fee2e2;
+  color: #991b1b;
+}

@@ -4,7 +4,7 @@ import type { TailoredResume } from "./tailor";
 // already says, so nothing can be invented. Quality depends on the resume having clear
 // headings (Summary, Skills, Experience, Education).
 
-const KEYWORDS = [
+export const KEYWORDS = [
   "python",
   "java",
   "javascript",

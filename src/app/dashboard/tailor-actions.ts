@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { extractResumeText } from "@/lib/resume/extract";
+import { analyzeFit } from "@/lib/resume/fit";
 import { renderResumePdf, tailoredFileName } from "@/lib/resume/render";
 import { tailorResume } from "@/lib/resume/tailor";
 import { createClient } from "@/lib/supabase/server";
@@ -78,7 +79,12 @@ async function tailorOne(
     .upload(storagePath, pdf, { contentType: "application/pdf", upsert: false });
   if (uploadError) throw new Error("upload");
 
-  const { error: insertError } = await supabase.from("tailored_resumes").insert({
+  const fit = analyzeFit({
+    resumeText,
+    jobTitle: job.title,
+    jobDescription: job.description ?? "",
+  });
+  const baseRow = {
     id: newId,
     user_id: user.id,
     job_id: job.id,
@@ -90,7 +96,18 @@ async function tailorOne(
     storage_path: storagePath,
     summary: tailored.summary || null,
     gaps: tailored.gaps,
+  };
+  let { error: insertError } = await supabase.from("tailored_resumes").insert({
+    ...baseRow,
+    match_score: fit.score,
+    matched_keywords: fit.matched,
+    missing_keywords: [...fit.missingRequired, ...fit.missingPreferred],
+    ats_issues: fit.checks.filter((c) => !c.ok).map((c) => `${c.label}: ${c.hint}`),
   });
+  if (insertError) {
+    // Older databases don't have the fit columns yet (migration 0008); save without them.
+    ({ error: insertError } = await supabase.from("tailored_resumes").insert(baseRow));
+  }
   if (insertError) {
     await supabase.storage.from("resumes").remove([storagePath]);
     throw new Error("save");
