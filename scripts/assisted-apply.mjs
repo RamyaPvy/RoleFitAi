@@ -176,6 +176,55 @@ async function answerChoices(frame, answers, me) {
   return { applied, skipped };
 }
 
+const APPLY_BUTTON =
+  /^\s*(apply( now| here| today| for this (job|role|position))?|apply to this (job|role|position)|start (your )?application|i'?m interested)\s*$/i;
+
+async function hasApplicationForm(page) {
+  for (const frame of page.frames()) {
+    const count = await frame
+      .evaluate(
+        () =>
+          document.querySelectorAll("input[type=file]").length * 5 +
+          document.querySelectorAll("input[type=text], input[type=tel], textarea").length,
+      )
+      .catch(() => 0);
+    if (count >= 4) return true;
+  }
+  return false;
+}
+
+// Many career pages only show a job description with an Apply link. Opening it just
+// navigates to the form; nothing is submitted.
+async function openApplyPage(page) {
+  if (await hasApplicationForm(page)) return false;
+  const found = await page
+    .evaluate((source) => {
+      const pattern = new RegExp(source, "i");
+      const items = [...document.querySelectorAll("a, button")].filter((el) =>
+        pattern.test((el.textContent || "").trim()),
+      );
+      const link = items.find((el) => el.tagName === "A" && el.getAttribute("href"));
+      if (link) return { href: link.href };
+      const button = items.find((el) => !!(el.offsetWidth || el.offsetHeight));
+      if (button) {
+        button.setAttribute("data-rf-apply", "1");
+        return { click: true };
+      }
+      return null;
+    }, APPLY_BUTTON.source)
+    .catch(() => null);
+  if (!found) return false;
+  if (found.href && !found.href.startsWith("mailto:") && !found.href.endsWith("#")) {
+    await page.goto(found.href, { waitUntil: "domcontentloaded", timeout: 45000 });
+  } else if (found.click) {
+    await page.locator('[data-rf-apply="1"]').first().click({ timeout: 8000 });
+  } else {
+    return false;
+  }
+  await page.waitForTimeout(3000);
+  return true;
+}
+
 async function fillFrame(frame, me, resumePath, answers) {
   const fields = await frame
     .locator("input, textarea")
@@ -198,9 +247,19 @@ async function fillFrame(frame, me, resumePath, answers) {
           .join(" ")
           .replace(/\s+/g, " ")
           .trim();
+        const form = el.closest("form") || el.parentElement?.parentElement;
+        const nearby = (form?.innerText || "").slice(0, 500).toLowerCase();
+        const fieldCount = form ? form.querySelectorAll("input:not([type=hidden]), textarea").length : 0;
+        const hasFile = !!form?.querySelector("input[type=file]");
+        const marketing =
+          /subscribe|newsletter|job alerts?|get notified|notify me|stay (up to date|updated)|talent (community|network)|join our/.test(
+            nearby,
+          ) &&
+          !hasFile &&
+          fieldCount <= 3;
         return {
           index,
-          visible,
+          visible: visible && !marketing,
           type: (el.getAttribute("type") || el.tagName).toLowerCase(),
           role: el.getAttribute("role") || "",
           value: el.value || "",
@@ -347,6 +406,7 @@ async function main() {
     try {
       await page.goto(applyUrlFor(item.apply_url), { waitUntil: "domcontentloaded", timeout: 45000 });
       await page.waitForTimeout(2500);
+      if (await openApplyPage(page)) console.log("  Opened the Apply page.");
       let total = { filled: 0, uploaded: false, needsYou: [] };
       for (const frame of page.frames()) {
         const r = await fillFrame(frame, me, resumePath, answers);
