@@ -4,7 +4,6 @@ import { trackJobAction } from "@/app/dashboard/application-actions";
 import { SelectJobsButton } from "@/app/dashboard/jobs/select-jobs-button";
 import { DashboardShell } from "@/app/dashboard/shell";
 import { tailorBatchAction, tailorResumeAction } from "@/app/dashboard/tailor-actions";
-import { PendingButton } from "./pending-button";
 import {
   expandRelatedTitles,
   type JobMatch,
@@ -13,6 +12,7 @@ import {
 } from "@/lib/jobs/matching";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
+import { PendingButton } from "./pending-button";
 
 export const dynamic = "force-dynamic";
 
