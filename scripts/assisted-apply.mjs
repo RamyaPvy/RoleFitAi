@@ -41,7 +41,7 @@ function applyUrlFor(url) {
 // Only identity and contact fields are filled. Legal, demographic and free-text questions
 // are always left for the candidate.
 function fieldValueFor(label, me) {
-  const text = label.toLowerCase();
+  const text = label.toLowerCase().replace(/[_.\-]+/g, " ");
   if (/cover letter|why |salary|compensation|pronoun|gender|race|veteran|disabilit/.test(text)) return null;
   if (/first\s*name|given name|vorname|voornaam|prénom|^nombre\b/.test(text)) return me.first;
   if (/last\s*name|surname|family name|nachname|achternaam|apellido|nom de famille/.test(text)) return me.last;
@@ -302,7 +302,16 @@ async function fillFrame(frame, me, resumePath, answers) {
         const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
         const id = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
         const wrap = el.closest("label");
-        const group = el.closest("div, fieldset, li");
+        let groupLabel = "";
+        for (let up = el.parentElement, depth = 0; up && depth < 4; up = up.parentElement, depth++) {
+          const controls = up.querySelectorAll("input:not([type=hidden]), textarea, select").length;
+          if (controls > 3) break;
+          const found = up.querySelector("label, legend");
+          if (found) {
+            groupLabel = found.textContent || "";
+            break;
+          }
+        }
         const label = [
           el.getAttribute("aria-label"),
           id?.textContent,
@@ -310,7 +319,7 @@ async function fillFrame(frame, me, resumePath, answers) {
           el.placeholder,
           el.name,
           el.id,
-          group?.querySelector("label, legend")?.textContent,
+          groupLabel,
         ]
           .filter(Boolean)
           .join(" ")
