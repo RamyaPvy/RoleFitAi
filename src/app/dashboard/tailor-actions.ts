@@ -197,15 +197,19 @@ export async function tailorBatchAction(formData: FormData) {
 
   let done = 0;
   let failed = 0;
-  for (const jobId of jobIds.slice(0, room)) {
-    try {
-      await tailorOne(supabase, user, jobId, resumeId.data);
-      done += 1;
-    } catch (error) {
-      console.error("Batch tailoring failed for a job:", error);
-      failed += 1;
+  const queue = jobIds.slice(0, room);
+  const worker = async () => {
+    for (let jobId = queue.shift(); jobId; jobId = queue.shift()) {
+      try {
+        await tailorOne(supabase, user, jobId, resumeId.data);
+        done += 1;
+      } catch (error) {
+        console.error("Batch tailoring failed for a job:", error);
+        failed += 1;
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
   const skipped = Math.max(0, jobIds.length - room);
 
   revalidatePath("/dashboard/tailored");

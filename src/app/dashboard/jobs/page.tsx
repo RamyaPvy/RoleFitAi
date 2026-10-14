@@ -4,6 +4,7 @@ import { trackJobAction } from "@/app/dashboard/application-actions";
 import { SelectJobsButton } from "@/app/dashboard/jobs/select-jobs-button";
 import { DashboardShell } from "@/app/dashboard/shell";
 import { tailorBatchAction, tailorResumeAction } from "@/app/dashboard/tailor-actions";
+import { PendingButton } from "./pending-button";
 import {
   expandRelatedTitles,
   type JobMatch,
@@ -291,9 +292,10 @@ export default async function JobMatchesPage({
                     </option>
                   ))}
                 </select>
-                <button className="button button-primary" type="submit">
-                  Tailor ticked jobs (max 30)
-                </button>
+                <PendingButton
+                  label="Tailor ticked jobs (max 30)"
+                  pendingLabel="Tailoring… keep this tab open (a few minutes)"
+                />
                 <SelectJobsButton />
                 <span className="form-hint">
                   Already-tailored jobs are marked and skipped. Then run{" "}
@@ -440,9 +442,10 @@ function JobCard({
                 </option>
               ))}
             </select>
-            <button className="button button-primary" type="submit">
-              Tailor my resume
-            </button>
+            <PendingButton
+              label="Tailor my resume"
+              pendingLabel="Tailoring… ~20 sec, please wait"
+            />
           </form>
         ) : (
           <p className="form-hint">
