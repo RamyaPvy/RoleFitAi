@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { deleteResumeAction } from "@/app/actions";
+import { saveAnswersAction } from "@/app/dashboard/answers-actions";
 import { DashboardShell } from "@/app/dashboard/shell";
 import { ProfileForm } from "@/app/profile-form";
 import { ResumeUploadForm } from "@/app/resume-upload-form";
@@ -8,8 +9,13 @@ import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ answers?: string }>;
+}) {
   if (!getSupabaseConfig()) redirect("/");
+  const params = await searchParams;
 
   const supabase = await createClient();
   const {
@@ -17,6 +23,12 @@ export default async function DashboardPage() {
     error: authError,
   } = await supabase.auth.getUser();
   if (authError || !user) redirect("/");
+
+  const { data: answers, error: answersError } = await supabase
+    .from("application_answers")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
@@ -68,6 +80,78 @@ export default async function DashboardPage() {
         </section>
       )}
       {!profileError && (
+        <section className="studio-panel" id="answers">
+          <div className="section-heading">
+            <div>
+              <h2>Saved application answers</h2>
+              <p>
+                Answer common employer questions once. Assisted apply pre-fills them; you still
+                review everything and press Submit. Only answer truthfully.
+              </p>
+            </div>
+          </div>
+          {answersError ? (
+            <div className="form-message is-error" role="alert">
+              Run <code>202610130007_create_application_answers.sql</code> in your Supabase SQL
+              Editor, then refresh.
+            </div>
+          ) : (
+            <form action={saveAnswersAction} className="profile-editor">
+              {params.answers === "saved" && (
+                <div className="form-message is-success" role="status">
+                  Saved.
+                </div>
+              )}
+              {(params.answers === "invalid" || params.answers === "failed") && (
+                <div className="form-message is-error" role="alert">
+                  Couldn&apos;t save. Check the values and try again.
+                </div>
+              )}
+              <div className="profile-form">
+                <YesNoField
+                  name="authorizedToWork"
+                  label="Legally authorized to work in the country you apply in?"
+                  value={answers?.authorized_to_work}
+                />
+                <YesNoField
+                  name="needsSponsorship"
+                  label="Will you now or in the future need visa sponsorship?"
+                  value={answers?.needs_sponsorship}
+                />
+                <YesNoField
+                  name="openToRelocate"
+                  label="Open to relocation?"
+                  value={answers?.open_to_relocate}
+                />
+                <TextField name="country" label="Country" value={answers?.country} />
+                <TextField
+                  name="howHeard"
+                  label="How did you hear about the job?"
+                  value={answers?.how_heard}
+                  placeholder="e.g. Job board"
+                />
+                <TextField
+                  name="noticePeriod"
+                  label="Notice period / earliest start"
+                  value={answers?.notice_period}
+                  placeholder="e.g. 2 weeks"
+                />
+                <TextField
+                  name="salaryExpectation"
+                  label="Salary expectation"
+                  value={answers?.salary_expectation}
+                />
+              </div>
+              <div className="form-actions">
+                <button className="button button-primary" type="submit">
+                  Save answers
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+      {!profileError && (
         <section className="studio-panel" id="resumes">
           <div className="section-heading">
             <div>
@@ -115,5 +199,45 @@ export default async function DashboardPage() {
         </section>
       )}
     </DashboardShell>
+  );
+}
+
+function YesNoField({
+  name,
+  label,
+  value,
+}: {
+  name: string;
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="form-field">
+      <label htmlFor={name}>{label}</label>
+      <select id={name} name={name} defaultValue={value ?? ""}>
+        <option value="">Not set (I'll answer myself)</option>
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+      </select>
+    </div>
+  );
+}
+
+function TextField({
+  name,
+  label,
+  value,
+  placeholder,
+}: {
+  name: string;
+  label: string;
+  value: string | null | undefined;
+  placeholder?: string;
+}) {
+  return (
+    <div className="form-field">
+      <label htmlFor={name}>{label}</label>
+      <input id={name} name={name} defaultValue={value ?? ""} placeholder={placeholder} />
+    </div>
   );
 }

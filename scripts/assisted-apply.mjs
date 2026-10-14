@@ -55,7 +55,128 @@ function fieldValueFor(label, me) {
   return null;
 }
 
-async function fillFrame(frame, me, resumePath) {
+// Maps a question to one of the candidate's saved answers. Returns null when the question is
+// not covered, so it is left for the candidate.
+function savedAnswerFor(question, answers) {
+  if (!answers) return null;
+  const q = question.toLowerCase();
+  if (/previously (worked|employed)|former employee|currently,? or have you|relative|conflict/.test(q)) return null;
+  if (/sponsor|visa/.test(q)) return answers.needs_sponsorship;
+  if (/authori[sz]ed|legally|eligible to work|right to work|work authori/.test(q)) {
+    return answers.authorized_to_work;
+  }
+  if (/relocat/.test(q)) return answers.open_to_relocate;
+  if (/hear about|how did you (find|hear)|where did you (find|hear)|referral source/.test(q)) {
+    return answers.how_heard;
+  }
+  if (/notice period|earliest (start|date)|when can you start|availability/.test(q)) {
+    return answers.notice_period;
+  }
+  if (/salary|compensation expectation|expected pay/.test(q)) return answers.salary_expectation;
+  if (/^\s*country\b/.test(q)) return answers.country;
+  return null;
+}
+
+// Tags every visible dropdown, yes/no radio group and combobox so Playwright can act on it.
+async function answerChoices(frame, answers, me) {
+  const controls = await frame
+    .evaluate(() => {
+      const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
+      const questionOf = (el) => {
+        const byFor = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+        const group = el.closest("fieldset");
+        const box = el.closest("div");
+        return clean(
+          el.getAttribute("aria-label") ||
+            byFor?.textContent ||
+            group?.querySelector("legend")?.textContent ||
+            box?.parentElement?.querySelector("label, legend")?.textContent ||
+            box?.querySelector("label, legend")?.textContent,
+        );
+      };
+      const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      const out = [];
+      let n = 0;
+      for (const el of document.querySelectorAll("select, input[type=radio], input[role=combobox]")) {
+        if (el.tagName !== "SELECT" && !visible(el) && el.type !== "radio") continue;
+        if (el.tagName === "SELECT" && !visible(el)) continue;
+        const tag = `rf${n++}`;
+        el.setAttribute("data-rf", tag);
+        if (el.type === "radio") {
+          const own = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+          out.push({
+            tag,
+            kind: "radio",
+            question: questionOf(el),
+            option: clean(own?.textContent || el.closest("label")?.textContent || el.value),
+            checked: el.checked,
+          });
+        } else {
+          out.push({
+            tag,
+            kind: el.tagName === "SELECT" ? "select" : "combobox",
+            question: questionOf(el),
+            options:
+              el.tagName === "SELECT" ? [...el.options].map((o) => clean(o.textContent)) : [],
+            chosen: el.tagName === "SELECT" ? el.selectedIndex > 0 : !!el.value,
+          });
+        }
+      }
+      return out;
+    })
+    .catch(() => []);
+
+  let applied = 0;
+  const skipped = [];
+  const yes = (v) => v === "yes";
+  const pickOption = (options, value) => {
+    const wanted = yes(value) || value === "no" ? (yes(value) ? "yes" : "no") : value.toLowerCase();
+    return options.find((o) => o.toLowerCase() === wanted) ??
+      options.find((o) => o.toLowerCase().startsWith(wanted)) ??
+      options.find((o) => o.toLowerCase().includes(wanted));
+  };
+
+  for (const c of controls) {
+    const value =
+      savedAnswerFor(c.question, answers) ||
+      (/location|city/i.test(c.question) && c.kind === "combobox" ? me.location : null);
+    const loc = frame.locator(`[data-rf="${c.tag}"]`);
+    try {
+      if (c.kind === "radio") {
+        if (c.checked || !value) continue;
+        const wanted = yes(value) ? "yes" : value === "no" ? "no" : null;
+        if (wanted && c.option.toLowerCase() === wanted) {
+          await loc.check({ force: true });
+          applied += 1;
+        }
+        continue;
+      }
+      if (c.chosen) continue;
+      if (!value) {
+        if (c.question) skipped.push(c.question.slice(0, 60));
+        continue;
+      }
+      if (c.kind === "select") {
+        const option = pickOption(c.options, value);
+        if (option) {
+          await loc.selectOption({ label: option });
+          applied += 1;
+        } else skipped.push(c.question.slice(0, 60));
+      } else {
+        await loc.click();
+        await loc.fill(yes(value) ? "Yes" : value === "no" ? "No" : value);
+        await frame.page().waitForTimeout(400);
+        await frame.page().keyboard.press("Enter");
+        applied += 1;
+      }
+    } catch {
+      if (c.question) skipped.push(c.question.slice(0, 60));
+    }
+  }
+  return { applied, skipped };
+}
+
+async function fillFrame(frame, me, resumePath, answers) {
   const fields = await frame
     .locator("input, textarea")
     .evaluateAll((nodes) =>
@@ -92,7 +213,9 @@ async function fillFrame(frame, me, resumePath) {
 
   let filled = 0;
   let uploaded = false;
-  const needsYou = [];
+  const choices = await answerChoices(frame, answers, me);
+  filled += choices.applied;
+  const needsYou = [...choices.skipped];
   const textTypes = new Set(["text", "email", "tel", "url", "input", "textarea", "search"]);
   const files = fields.filter((f) => f.type === "file");
 
@@ -107,12 +230,12 @@ async function fillFrame(frame, me, resumePath) {
         }
         continue;
       }
-      if (!f.visible || !textTypes.has(f.type) || f.role === "combobox") {
-        if (f.visible && f.required && f.value === "") needsYou.push(f.label.slice(0, 60));
-        continue;
-      }
+      if (!f.visible || !textTypes.has(f.type) || f.role === "combobox") continue;
       if (f.value !== "") continue;
-      const value = fieldValueFor(f.label, me);
+      const saved = savedAnswerFor(f.label, answers);
+      const value =
+        fieldValueFor(f.label, me) ||
+        (saved === "yes" ? "Yes" : saved === "no" ? "No" : saved);
       if (value) {
         await locator.fill(value);
         filled += 1;
@@ -167,6 +290,16 @@ async function main() {
     github: profile?.github_url || "",
   };
 
+  const { data: answers } = await supabase
+    .from("application_answers")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!answers) console.log("Tip: save your standard answers on My profile to pre-fill more.");
+  if (!me.last || !me.phone || !me.location) {
+    console.log("Tip: add your full name, phone and location on My profile to pre-fill more.");
+  }
+
   const { data: tailored } = await supabase
     .from("tailored_resumes")
     .select("id, job_id, company_name, job_title, apply_url, file_name, storage_path")
@@ -216,7 +349,7 @@ async function main() {
       await page.waitForTimeout(2500);
       let total = { filled: 0, uploaded: false, needsYou: [] };
       for (const frame of page.frames()) {
-        const r = await fillFrame(frame, me, resumePath);
+        const r = await fillFrame(frame, me, resumePath, answers);
         total = {
           filled: total.filled + r.filled,
           uploaded: total.uploaded || r.uploaded,

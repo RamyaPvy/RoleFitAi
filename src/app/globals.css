@@ -2056,3 +2056,13 @@ h1 {
   font-size: 0.85rem;
   color: #5f6b73;
 }
+
+.form-field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #dfe5ea;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}

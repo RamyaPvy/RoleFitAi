@@ -363,6 +363,10 @@ been reviewed.
 
 ## Morning batch: assisted apply
 
+Before the first run, run `supabase/migrations/202610130007_create_application_answers.sql`
+in the Supabase SQL Editor, then fill in **Saved application answers** on My profile
+(sponsorship, work authorization, relocation, how you heard, notice period, country).
+
 1. On **Job matches**, tick up to 30 jobs, choose your resume, and click **Tailor ticked jobs**.
 2. In a terminal in the project folder run `npm run apply:assist -- --email you@example.com`
    (the email is optional if your project has only one account).

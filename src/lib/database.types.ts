@@ -268,6 +268,41 @@ export type Database = {
         Update: Record<string, never>;
         Relationships: [];
       };
+      application_answers: {
+        Row: {
+          user_id: string;
+          country: string | null;
+          authorized_to_work: "yes" | "no" | null;
+          needs_sponsorship: "yes" | "no" | null;
+          open_to_relocate: "yes" | "no" | null;
+          how_heard: string | null;
+          notice_period: string | null;
+          salary_expectation: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          country?: string | null;
+          authorized_to_work?: "yes" | "no" | null;
+          needs_sponsorship?: "yes" | "no" | null;
+          open_to_relocate?: "yes" | "no" | null;
+          how_heard?: string | null;
+          notice_period?: string | null;
+          salary_expectation?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          country?: string | null;
+          authorized_to_work?: "yes" | "no" | null;
+          needs_sponsorship?: "yes" | "no" | null;
+          open_to_relocate?: "yes" | "no" | null;
+          how_heard?: string | null;
+          notice_period?: string | null;
+          salary_expectation?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
