@@ -1,0 +1,187 @@
+"use server";
+
+import { randomUUID } from "node:crypto";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import { extractResumeText } from "@/lib/resume/extract";
+import { renderResumePdf, tailoredFileName } from "@/lib/resume/render";
+import { tailorResume } from "@/lib/resume/tailor";
+import { createClient } from "@/lib/supabase/server";
+
+const DAILY_LIMIT = 20;
+
+async function requireUser() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/");
+  return { supabase, user };
+}
+
+const tailorSchema = z.object({ jobId: z.uuid(), resumeId: z.uuid() });
+
+export async function tailorResumeAction(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const parsed = tailorSchema.safeParse({
+    jobId: String(formData.get("jobId") ?? ""),
+    resumeId: String(formData.get("resumeId") ?? ""),
+  });
+  if (!parsed.success) redirect("/dashboard/tailored?error=choose-resume");
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from("tailored_resumes")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .gte("created_at", since);
+  if ((count ?? 0) >= DAILY_LIMIT) redirect("/dashboard/tailored?error=limit");
+
+  const [{ data: job }, { data: resume }, { data: profile }] = await Promise.all([
+    supabase
+      .from("jobs")
+      .select("id, title, description, apply_url, company_name, companies(name)")
+      .eq("id", parsed.data.jobId)
+      .maybeSingle(),
+    supabase
+      .from("resumes")
+      .select("id, storage_path, content_type")
+      .eq("id", parsed.data.resumeId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase.from("profiles").select("full_name").eq("user_id", user.id).maybeSingle(),
+  ]);
+  if (!job || !resume) redirect("/dashboard/tailored?error=not-found");
+
+  const company = Array.isArray(job.companies) ? job.companies[0] : job.companies;
+  const companyName = job.company_name ?? company?.name ?? "Company";
+
+  let newId: string;
+  try {
+    const { data: file, error: downloadError } = await supabase.storage
+      .from("resumes")
+      .download(resume.storage_path);
+    if (downloadError || !file) throw new Error("download");
+
+    const resumeText = await extractResumeText(
+      new Uint8Array(await file.arrayBuffer()),
+      resume.content_type,
+    );
+    if (resumeText.length < 100) throw new Error("unreadable");
+
+    const tailored = await tailorResume({
+      resumeText,
+      jobTitle: job.title,
+      companyName,
+      jobDescription: job.description ?? job.title,
+    });
+    if (profile?.full_name) tailored.name = profile.full_name;
+
+    const pdf = await renderResumePdf(tailored);
+    const fileName = tailoredFileName(companyName, tailored.name);
+    newId = randomUUID();
+    const storagePath = `${user.id}/tailored/${newId}.pdf`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("resumes")
+      .upload(storagePath, pdf, { contentType: "application/pdf", upsert: false });
+    if (uploadError) throw new Error("upload");
+
+    const { error: insertError } = await supabase.from("tailored_resumes").insert({
+      id: newId,
+      user_id: user.id,
+      job_id: job.id,
+      source_resume_id: resume.id,
+      company_name: companyName,
+      job_title: job.title,
+      apply_url: job.apply_url,
+      file_name: fileName,
+      storage_path: storagePath,
+      summary: tailored.summary || null,
+      gaps: tailored.gaps,
+    });
+    if (insertError) {
+      await supabase.storage.from("resumes").remove([storagePath]);
+      throw new Error("save");
+    }
+  } catch (error) {
+    console.error("Resume tailoring failed:", error);
+    const reason = error instanceof Error ? error.message : "";
+    const code =
+      reason === "unreadable"
+        ? "unreadable"
+        : reason === "unstructured"
+          ? "unstructured"
+          : "failed";
+    redirect(`/dashboard/tailored?error=${code}`);
+  }
+
+  revalidatePath("/dashboard/tailored");
+  redirect(`/dashboard/tailored?new=${newId}`);
+}
+
+// Records the candidate's own confirmation that they submitted on the employer site.
+export async function markTailoredAppliedAction(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const id = z.uuid().safeParse(String(formData.get("id") ?? ""));
+  if (!id.success) return;
+
+  const { data: tailored } = await supabase
+    .from("tailored_resumes")
+    .select("job_id, company_name, job_title, apply_url, file_name")
+    .eq("id", id.data)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!tailored) return;
+
+  const now = new Date().toISOString();
+  const row = {
+    company_name: tailored.company_name,
+    job_title: tailored.job_title,
+    apply_url: tailored.apply_url,
+    resume_file_name: tailored.file_name,
+    status: "applied" as const,
+    applied_at: now,
+    updated_at: now,
+  };
+
+  const existing = tailored.job_id
+    ? (
+        await supabase
+          .from("applications")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("job_id", tailored.job_id)
+          .maybeSingle()
+      ).data
+    : null;
+
+  if (existing) {
+    await supabase.from("applications").update(row).eq("id", existing.id).eq("user_id", user.id);
+  } else {
+    await supabase
+      .from("applications")
+      .insert({ ...row, user_id: user.id, job_id: tailored.job_id });
+  }
+  revalidatePath("/dashboard/applications");
+  revalidatePath("/dashboard/tailored");
+}
+
+export async function deleteTailoredAction(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const id = z.uuid().safeParse(String(formData.get("id") ?? ""));
+  if (!id.success) return;
+
+  const { data: tailored } = await supabase
+    .from("tailored_resumes")
+    .select("storage_path")
+    .eq("id", id.data)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!tailored) return;
+
+  await supabase.storage.from("resumes").remove([tailored.storage_path]);
+  await supabase.from("tailored_resumes").delete().eq("id", id.data).eq("user_id", user.id);
+  revalidatePath("/dashboard/tailored");
+}
