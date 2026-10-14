@@ -390,6 +390,58 @@ async function fillFrame(frame, me, resumePath, answers) {
   return { filled, uploaded, needsYou };
 }
 
+// Opt-in (--submit). Clicks Submit only when the form looks complete: resume uploaded, no
+// required question left unanswered, no CAPTCHA, and the button is enabled. Never solves a CAPTCHA.
+async function trySubmit(page, total) {
+  if (!total.uploaded) return "resume was not uploaded";
+  if (total.needsYou.length > 0) return `required answers missing (${total.needsYou.length})`;
+  for (const frame of page.frames()) {
+    const info = await frame
+      .evaluate(() => {
+        const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        const captcha = [...document.querySelectorAll("iframe, div")].some(
+          (el) => /recaptcha|hcaptcha|turnstile|captcha/i.test(`${el.id} ${el.className} ${el.getAttribute("src") || ""}`) && visible(el),
+        );
+        const file = document.querySelector("input[type=file]");
+        const form = file?.closest("form") || document.querySelector("form");
+        if (!form) return null;
+        const pattern = /^\s*(submit( application)?|send application|apply( now)?|bewerbung (absenden|senden)|jetzt bewerben|bewerben)\s*$/i;
+        const buttons = [...form.querySelectorAll("button, input[type=submit]")].filter((b) =>
+          pattern.test(b.textContent || b.value || ""),
+        );
+        const button = buttons.find(visible);
+        if (!button) return { captcha, found: false };
+        const unchecked = [...form.querySelectorAll("input[type=checkbox][required]")].filter((c) => !c.checked).length;
+        button.setAttribute("data-rf-submit", "1");
+        return {
+          captcha,
+          found: true,
+          disabled: button.disabled || button.getAttribute("aria-disabled") === "true",
+          invalid: form.checkValidity ? !form.checkValidity() : false,
+          unchecked,
+        };
+      })
+      .catch(() => null);
+    if (!info) continue;
+    if (info.captcha) return "a CAPTCHA is present";
+    if (!info.found) continue;
+    if (info.disabled) return "the Submit button is still disabled (a required field is empty)";
+    if (info.invalid) return "the form still has invalid or empty required fields";
+    if (info.unchecked) return "a required consent checkbox is not ticked";
+    await frame.locator('[data-rf-submit="1"]').first().click({ timeout: 8000 });
+    await page.waitForTimeout(6000);
+    const confirmed = await page
+      .evaluate(() =>
+        /thank you|thanks for (applying|your application)|application (has been )?(received|submitted|sent)|successfully (submitted|applied)|vielen dank|bewerbung (ist )?(eingegangen|erfolgreich)/i.test(
+          document.body.innerText,
+        ),
+      )
+      .catch(() => false);
+    return confirmed ? "submitted" : "clicked Submit but no confirmation was detected - check the page";
+  }
+  return "no Submit button found";
+}
+
 async function main() {
   const env = loadEnv();
   const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -482,8 +534,13 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   let submitted = 0;
+  const autoSubmit = process.argv.includes("--submit");
+  if (autoSubmit) {
+    console.log("Auto-submit is ON: forms are submitted only when every required field is filled.\n");
+  }
   for (const [n, item] of queue.entries()) {
     console.log(`\n[${n + 1}/${queue.length}] ${item.job_title} at ${item.company_name}`);
+    let autoDone = false;
     const { data: blob } = await supabase.storage.from("resumes").download(item.storage_path);
     if (!blob) {
       console.log("  Could not download the tailored resume; skipping.");
@@ -513,11 +570,22 @@ async function main() {
         console.log(`  Needs you: ${[...new Set(total.needsYou)].slice(0, 8).join(" | ")}`);
       }
       console.log("  Review the form, answer any questions, solve any CAPTCHA, then click Submit.");
+      if (autoSubmit) {
+        const result = await trySubmit(page, total);
+        if (result === "submitted") {
+          autoDone = true;
+          console.log("  Submitted automatically (confirmation text detected).");
+        } else {
+          console.log(`  Not auto-submitted: ${result}. Finish it yourself.`);
+        }
+      }
     } catch (error) {
       console.log(`  Could not open or fill the page (${error.message}). You can apply manually.`);
     }
 
-    const answer = (await rl.question("  Did you submit it? [y]es / [n]o, next / [q]uit: ")).trim().toLowerCase();
+    const answer = autoDone
+      ? "y"
+      : (await rl.question("  Did you submit it? [y]es / [n]o, next / [q]uit: ")).trim().toLowerCase();
     if (answer.startsWith("y")) {
       const now = new Date().toISOString();
       const row = {
