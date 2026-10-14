@@ -61,6 +61,8 @@ function savedAnswerFor(question, answers) {
   if (!answers) return null;
   const q = question.toLowerCase();
   if (/previously (worked|employed)|former employee|currently,? or have you|relative|conflict/.test(q)) return null;
+  if (/pronoun|transgender/.test(q)) return null;
+  if (/\bgender\b|geschlecht|\bsex\b/.test(q)) return "Female";
   if (/sponsor|visa/.test(q)) return answers.needs_sponsorship;
   if (/authori[sz]ed|legally|eligible to work|right to work|work authori/.test(q)) {
     return answers.authorized_to_work;
@@ -145,8 +147,8 @@ async function answerChoices(frame, answers, me) {
     try {
       if (c.kind === "radio") {
         if (c.checked || !value) continue;
-        const wanted = yes(value) ? "yes" : value === "no" ? "no" : null;
-        if (wanted && c.option.toLowerCase() === wanted) {
+        const wanted = yes(value) ? "yes" : value === "no" ? "no" : value.toLowerCase();
+        if (c.option.toLowerCase() === wanted) {
           await loc.check({ force: true });
           applied += 1;
         }
@@ -158,7 +160,10 @@ async function answerChoices(frame, answers, me) {
         continue;
       }
       if (c.kind === "select") {
-        const option = pickOption(c.options, value);
+        let option = pickOption(c.options, value);
+        if (!option && /hear|origin|source|find/i.test(c.question)) {
+          option = c.options.find((o) => /career|company|website|job board|online|other|internet|linkedin/i.test(o));
+        }
         if (option) {
           await loc.selectOption({ label: option });
           applied += 1;
@@ -538,9 +543,12 @@ async function main() {
   if (autoSubmit) {
     console.log("Auto-submit is ON: forms are submitted only when every required field is filled.\n");
   }
-  for (const [n, item] of queue.entries()) {
-    console.log(`\n[${n + 1}/${queue.length}] ${item.job_title} at ${item.company_name}`);
+  const work = queue.map((item) => ({ item, retry: false }));
+  for (let n = 0; n < work.length; n++) {
+    const { item, retry } = work[n];
+    console.log(`\n[${n + 1}/${work.length}] ${item.job_title} at ${item.company_name}${retry ? " (retry: CAPTCHA)" : ""}`);
     let autoDone = false;
+    let deferred = false;
     const { data: blob } = await supabase.storage.from("resumes").download(item.storage_path);
     if (!blob) {
       console.log("  Could not download the tailored resume; skipping.");
@@ -575,7 +583,16 @@ async function main() {
         if (result === "submitted") {
           autoDone = true;
           console.log("  Submitted automatically (confirmation text detected).");
+        } else if (/captcha/i.test(result) && !retry) {
+          deferred = true;
+          process.stdout.write("\x07");
+          console.log("  *** CAPTCHA detected - moved to the end of the queue. Continuing with the next job. ***");
+          work.push({ item, retry: true });
         } else {
+          if (/captcha/i.test(result)) {
+            process.stdout.write("\x07");
+            console.log("  *** CAPTCHA: solve it in the Chrome window and click Submit. ***");
+          }
           console.log(`  Not auto-submitted: ${result}. Finish it yourself.`);
         }
       }
@@ -583,6 +600,7 @@ async function main() {
       console.log(`  Could not open or fill the page (${error.message}). You can apply manually.`);
     }
 
+    if (deferred) continue;
     const answer = autoDone
       ? "y"
       : (await rl.question("  Did you submit it? [y]es / [n]o, next / [q]uit: ")).trim().toLowerCase();
